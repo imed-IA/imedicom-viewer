@@ -3691,11 +3691,14 @@ function drawAnonCode(ctx, f){
   const margin = ctx.canvas.width * 0.00693;
   const thickW = fontSize * 0.03;
   const YELLOW = 'rgba(255,255,120,0.95)';
+     const YELLOW_DATE = 'rgba(255,235,59,0.95)';
+  const dt = (m.studyDateTimeDisplay || '').trim();
   ctx.font = fontSize + 'px "IBM Plex Mono", monospace';
   ctx.textBaseline = 'top';
   if (m.isFrontal) {
     ctx.textAlign = 'right';
     fillTextThick(ctx, code, ctx.canvas.width - margin, margin, YELLOW, thickW);
+         if (dt) fillTextThick(ctx, dt, ctx.canvas.width - margin, ctx.canvas.height - margin - fontSize, YELLOW_DATE, thickW);
     return;
   }
   const topLateralMargin = (margin + lineHeight * 2.5) * 0.2805;
@@ -3703,6 +3706,9 @@ function drawAnonCode(ctx, f){
   ctx.textAlign = side === 'left' ? 'left' : 'right';
   const x = side === 'left' ? topLateralMargin : ctx.canvas.width - topLateralMargin;
   fillTextThick(ctx, code, x, topLateralMargin, YELLOW, thickW);
+     const bottomLateralMargin = (margin + lineHeight * 2.5) * 0.4519;
+  const xBottom = side === 'left' ? bottomLateralMargin : ctx.canvas.width - bottomLateralMargin;
+  if (dt) fillTextThick(ctx, dt, xBottom, ctx.canvas.height - bottomLateralMargin - fontSize, YELLOW_DATE, thickW);
 } 
    
    function draw(f, scale, skipLayout){
