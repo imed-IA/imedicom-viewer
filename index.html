@@ -3675,11 +3675,41 @@ input[type=range]{accent-color:var(--accent);width:100%;}
     fillTextThick(ctx, dt.trim(), xBottom, ctx.canvas.height - bottomLateralMargin - fontSize, YELLOW_DATE, thickW);
   }
 
-  function draw(f, scale, skipLayout){
+ function buildAnonCode(f){
+  const m = f.meta || {};
+  const idDigits = (m.patientId || '').replace(/\D/g,'').slice(0,4);
+  const birthYear = (m.birthDate || '').slice(-4);
+  if (idDigits.length === 4 && /^\d{4}$/.test(birthYear)) return idDigits + birthYear;
+  return 'SIN-DATOS';
+}
+
+function drawAnonCode(ctx, f){
+  const m = f.meta || {};
+  const code = buildAnonCode(f);
+  const fontSize = ctx.canvas.width * 0.0177;
+  const lineHeight = ctx.canvas.width * 0.0202;
+  const margin = ctx.canvas.width * 0.00693;
+  const thickW = fontSize * 0.03;
+  const YELLOW = 'rgba(255,255,120,0.95)';
+  ctx.font = fontSize + 'px "IBM Plex Mono", monospace';
+  ctx.textBaseline = 'top';
+  if (m.isFrontal) {
+    ctx.textAlign = 'right';
+    fillTextThick(ctx, code, ctx.canvas.width - margin, margin, YELLOW, thickW);
+    return;
+  }
+  const topLateralMargin = (margin + lineHeight * 2.5) * 0.2805;
+  const side = m.convexitySide;
+  ctx.textAlign = side === 'left' ? 'left' : 'right';
+  const x = side === 'left' ? topLateralMargin : ctx.canvas.width - topLateralMargin;
+  fillTextThick(ctx, code, x, topLateralMargin, YELLOW, thickW);
+} 
+   
+   function draw(f, scale, skipLayout){
     canvas.style.display = 'block';
     emptyEl.style.display = 'none';
     const ctx = windowToCanvas(f, canvas, scale);
-    if (window.dvShowPatientOverlay !== false) drawOverlay(ctx, f, scale);
+    if (window.dvShowPatientOverlay !== false) drawOverlay(ctx, f, scale); else drawAnonCode(ctx, f);
     if (window.dvShowAnnotations !== false) drawAnnotations(ctx, f);
     if (skipLayout) return;
     // fitCanvasToContainer() + updateActiveAspectRatio() recalculan el
@@ -3733,7 +3763,7 @@ input[type=range]{accent-color:var(--accent);width:100%;}
     }
     const exportCanvas = document.createElement('canvas');
     const ctx = windowToCanvas(f, exportCanvas, multiplier);
-    if (window.dvShowPatientOverlay !== false) drawOverlay(ctx, f, multiplier);
+    if (window.dvShowPatientOverlay !== false) drawOverlay(ctx, f, multiplier); else drawAnonCode(ctx, f);
    if (window.dvShowAnnotations !== false) drawAnnotations(ctx, f);
     return exportCanvas;
   }
@@ -3749,7 +3779,7 @@ input[type=range]{accent-color:var(--accent);width:100%;}
     // El campo "Apellidos" puede traer mas de un apellido separado por
     // espacio (ej: "Garcia Lopez"), asi que se toma solo la PRIMERA palabra
     // de ese campo = el primer apellido.
-    const raw = (f.meta && f.meta.patientNameRaw) || '';
+    if (window.dvShowPatientOverlay === false) return buildAnonCode(f); const raw = (f.meta && f.meta.patientNameRaw) || '';
     const familyField = raw.split('^')[0] || '';
     let surname = familyField.trim().split(/\s+/)[0] || '';
     if (!surname) surname = 'Paciente';
