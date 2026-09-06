@@ -4214,7 +4214,8 @@ function drawAnonCode(ctx, f){
       });
       const result = await resp.json();
       if (result.valid) {
-        saveSession(code);
+        window.__dvAnonKey = result.anonKey || null;
+         saveSession(code);
         unlock();
         if (!silent) {
           showMsg('Acceso concedido' + (result.expiresAt ? (' — vence ' + new Date(result.expiresAt).toLocaleDateString('es-PE')) : ''), false);
