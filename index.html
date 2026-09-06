@@ -3728,7 +3728,7 @@ function drawAnonCode(ctx, f){
   const thickW = fontSize * 0.03;
   const YELLOW = 'rgba(255,255,120,0.95)';
      const YELLOW_DATE = 'rgba(255,235,59,0.95)';
-  const dt = (m.studyDateTimeDisplay || '').trim();
+    const dt = (m.studyYear || '').trim();
   ctx.font = fontSize + 'px "IBM Plex Mono", monospace';
   ctx.textBaseline = 'top';
   if (m.isFrontal) {
