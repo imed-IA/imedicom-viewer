@@ -3675,12 +3675,41 @@ input[type=range]{accent-color:var(--accent);width:100%;}
     fillTextThick(ctx, dt.trim(), xBottom, ctx.canvas.height - bottomLateralMargin - fontSize, YELLOW_DATE, thickW);
   }
 
- function buildAnonCode(f){
+// ---- Codigo anonimo estable (HMAC-SHA256 con clave del servidor) ----
+// El mismo paciente produce SIEMPRE el mismo codigo, pero el codigo no
+// permite recuperar el documento: sin la clave (que vive en el Worker,
+// nunca en este repositorio) la fuerza bruta sobre los 8 digitos del DNI
+// no sirve de nada. Se calcula al cargar el archivo y queda guardado en
+// meta.anonCode, porque crypto.subtle es asincrono y las funciones de
+// dibujo y de nombre de archivo son sincronas.
+function normalizePatientId(raw){
+  let s = (raw || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (/^\d+$/.test(s)) s = s.replace(/^0+/, '');   // 06052994 y 6052994 = misma persona
+  return s;
+}
+
+async function computeAnonCode(rawId){
+  const norm = normalizePatientId(rawId);
+  if (!norm) return 'SIN-ID';
+  const key = window.__dvAnonKey;
+  if (!key) return 'SIN-CLAVE';
+  try {
+    const enc = new TextEncoder();
+    const ck = await crypto.subtle.importKey('raw', enc.encode(key),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', ck, enc.encode(norm)));
+    let hex = '';
+    for (let i = 0; i < 6; i++) hex += sig[i].toString(16).padStart(2, '0');
+    hex = hex.toUpperCase();
+    return hex.slice(0,4) + '-' + hex.slice(4,8) + '-' + hex.slice(8,12);
+  } catch(e){
+    return 'SIN-CLAVE';
+  }
+}
+
+function buildAnonCode(f){
   const m = f.meta || {};
-  const idDigits = (m.patientId || '').replace(/\D/g,'').slice(0,4);
-  const birthYear = (m.birthDate || '').slice(-4);
-  if (idDigits.length === 4 && /^\d{4}$/.test(birthYear)) return idDigits + birthYear;
-  return 'SIN-DATOS';
+  return m.anonCode || 'SIN-CLAVE';
 }
 
 function drawAnonCode(ctx, f){
