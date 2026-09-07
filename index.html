@@ -3882,7 +3882,13 @@ const REGISTRY_HEADER = 'codigo_anonimo;nombre_real;documento_real;nacimiento_re
 function csvCell(v){
   return '"' + (v == null ? '' : String(v)).replace(/"/g,'""') + '"';
 }
-
+// AAAAMMDD -> DD/MM/AAAA. Si el equipo no trae fecha valida, se deja el valor
+// crudo tal cual vino, para no perder informacion en el registro.
+function fmtFechaDicom(v){
+  const s = (v||'').replace(/\D/g,'');
+  if (s.length !== 8) return v || '';
+  return s.slice(6,8) + '/' + s.slice(4,6) + '/' + s.slice(0,4);
+}
 function buildRegistryRow(f){
   const ds = f.dataSet, els = ds.elements, b = ds.byteArray;
   const g = t => els[t] ? rawTagStr(b, els[t]) : '';
@@ -3890,8 +3896,8 @@ function buildRegistryRow(f){
   const stamp = n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate())+' '+p(n.getHours())+':'+p(n.getMinutes());
   return [
     (f.meta && f.meta.anonCode) || 'SIN-ID',
-    g('x00100010'), g('x00100020'), g('x00100030'),
-    g('x00080020'), g('x00080030'),
+           g('x00100010'), g('x00100020'), fmtFechaDicom(g('x00100030')),
+        fmtFechaDicom(g('x00080020')), g('x00080030'),
     f.name || '', g('x0020000d'), stamp
   ].map(csvCell).join(';');
 }
