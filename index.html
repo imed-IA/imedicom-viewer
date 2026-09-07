@@ -1362,13 +1362,19 @@ input[type=range]{accent-color:var(--accent);width:100%;}
           entry.dataSet = dataSet;
           entry.meta = extractMeta(dataSet);
           entry.pixel = extractPixel(dataSet);          
-           computeAnonCode(entry.meta.patientId).then(code => {
-            entry.meta.anonCode = code;
+                     (async () => {
+            entry.meta.anonCode = await computeAnonCode(entry.meta.patientId);
             const y = (entry.meta.studyDate || '').match(/\d{4}/);
             entry.meta.studyYear = y ? y[0] : '';
+            const g = t => dataSet.elements[t] ? rawTagStr(byteArray, dataSet.elements[t]) : '';
+            entry.meta.anonUids = {
+              study:  await deriveUid(g('x0020000d')),
+              series: await deriveUid(g('x0020000e')),
+              sop:    await deriveUid(g('x00080018'))
+            };
             renderFileList();
             if (state.activeIndex === idx) selectFile(idx);
-          });
+          })();
           entry.pixel.origWindowCenter = entry.pixel.windowCenter;
           entry.pixel.origWindowWidth = entry.pixel.windowWidth;
           // Las radiografias de TORAX deben mostrarse siempre en horizontal
