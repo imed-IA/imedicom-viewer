@@ -705,6 +705,10 @@ input[type=range]{accent-color:var(--accent);width:100%;}
             title="Descarga el DICOM sin datos del paciente, para enviar a lectura ciega">
             Descargar DICOM anónimo
           </button>
+                     <button class="dv-btn secondary" id="dv-export-dicom-all"
+            title="Descarga todos los estudios cargados como DICOM anónimo">
+            Descargar todos (DICOM anónimo)
+          </button>
         </div>
       </div>
     </div>
@@ -3901,7 +3905,35 @@ function buildRegistryRow(f){
     f.name || '', g('x0020000d'), stamp
   ].map(csvCell).join(';');
 }
-
+// Version en bloque: escribe el CSV una sola vez con todas las filas nuevas.
+async function appendRowsToRegistry(rows){
+  const dir = downloadDirHandle ? ((await resolveActiveDirHandle()) || downloadDirHandle) : null;
+  let prev = '';
+  if (dir){
+    try {
+      const fh = await dir.getFileHandle(REGISTRY_NAME, { create: true });
+      try { prev = await (await fh.getFile()).text(); } catch(e){ prev = ''; }
+      if (!prev.trim()) prev = '\ufeff' + REGISTRY_HEADER + '\r\n';
+      else if (!/\n$/.test(prev)) prev += '\r\n';
+      const nuevas = rows.filter(r => prev.indexOf(r.split(';').slice(0,3).join(';')) === -1);
+      if (nuevas.length){
+        const w = await fh.createWritable();
+        await w.write(prev + nuevas.join('\r\n') + '\r\n');
+        await w.close();
+      }
+      return true;
+    } catch(err){
+      console.error('No se pudo actualizar el registro en bloque', err);
+    }
+  }
+  const blob = new Blob(['\ufeff' + REGISTRY_HEADER + '\r\n' + rows.join('\r\n') + '\r\n'], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = REGISTRY_NAME;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  return false;
+}
 async function appendToRegistry(f){
   const row  = buildRegistryRow(f);
   const code = csvCell((f.meta && f.meta.anonCode) || 'SIN-ID');
@@ -4244,6 +4276,58 @@ function drawAnonCode(ctx, f){
     }
   }
   if (exportDicomBtn) exportDicomBtn.addEventListener('click', exportAnonDicom);
+     // ---- Exportacion en bloque de DICOM anonimos ----
+  // Salta los estudios que fallan y reporta al final cuales fueron.
+  // El registro se escribe UNA sola vez al terminar, no una vez por archivo.
+  const exportDicomAllBtn = document.getElementById('dv-export-dicom-all');
+  async function exportAnonDicomAll(){
+    if (exportBusy) return;
+    const listos = state.files.filter(f => f.status === 'ok');
+    if (!listos.length){ alert('No hay estudios cargados.'); return; }
+    setExportBusy(true);
+    const usados = new Set();
+    const filas = [];
+    const fallidos = [];
+    let hechos = 0;
+    try {
+      await ensureFolderChosen();
+      for (const f of listos){
+        try {
+          const bytes = buildAnonymizedDicom(f);
+          let base = ((f.meta && f.meta.anonCode) || 'SIN-ID');
+          let nombre = base + '.dcm', n = 2;
+          while (usados.has(nombre)) { nombre = base + '_' + n + '.dcm'; n++; }
+          usados.add(nombre);
+          const blob = new Blob([bytes], { type: 'application/dicom' });
+          const guardado = await saveBlobToChosenFolder(blob, nombre);
+          if (!guardado){
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = nombre;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            await new Promise(r => setTimeout(r, 300));
+            setTimeout(()=>URL.revokeObjectURL(url), 2000);
+          }
+          filas.push(buildRegistryRow(f));
+          hechos++;
+          showExportProgress(hechos, listos.length, 'DICOM');
+        } catch(err){
+          fallidos.push((f.name || '(sin nombre)') + ': ' + (err && err.message ? err.message : err));
+        }
+      }
+      if (filas.length) await appendRowsToRegistry(filas);
+      finishExportProgress(hechos, 'DICOM');
+      if (fallidos.length){
+        alert('Se exportaron ' + hechos + ' de ' + listos.length + ' estudios.\n\n' +
+              'No se pudieron exportar:\n- ' + fallidos.join('\n- '));
+      }
+    } catch(err){
+      alert('Se interrumpio la exportacion:\n' + (err && err.message ? err.message : err));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+  if (exportDicomAllBtn) exportDicomAllBtn.addEventListener('click', exportAnonDicomAll);
   exportJpgBtn.addEventListener('click', () => {
     currentSingleFormat = 'jpg';
     updateSplitButtonLabel(exportMainBtn, 'Descargar', 'jpg');
