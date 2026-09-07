@@ -3869,6 +3869,66 @@ function buildAnonymizedDicom(f){
   let o=0; for (const p of parts){ out.set(p,o); o+=p.length; }
   return out;
 }
+// ---- Registro de correspondencia (SOLO IMEDICA, NUNCA se envia) ----
+// Es el equivalente en el visor de la tabla maestra del script de Python:
+// permite saber a quien pertenece un codigo anonimo si el radiologo reporta
+// un problema con un estudio. El archivo se acumula: cada exportacion agrega
+// una fila. Se guarda en la carpeta de descarga elegida, con un nombre que
+// avisa que no debe salir de la computadora de IMEDICA.
+const REGISTRY_NAME = 'NO-ENVIAR_registro_correspondencia.csv';
+const REGISTRY_HEADER = 'codigo_anonimo;nombre_real;documento_real;nacimiento_real;' +
+  'fecha_estudio_real;hora_estudio_real;archivo_original;uid_estudio_original;exportado_el';
+
+function csvCell(v){
+  return '"' + (v == null ? '' : String(v)).replace(/"/g,'""') + '"';
+}
+
+function buildRegistryRow(f){
+  const ds = f.dataSet, els = ds.elements, b = ds.byteArray;
+  const g = t => els[t] ? rawTagStr(b, els[t]) : '';
+  const n = new Date(), p = x => String(x).padStart(2,'0');
+  const stamp = n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate())+' '+p(n.getHours())+':'+p(n.getMinutes());
+  return [
+    (f.meta && f.meta.anonCode) || 'SIN-ID',
+    g('x00100010'), g('x00100020'), g('x00100030'),
+    g('x00080020'), g('x00080030'),
+    f.name || '', g('x0020000d'), stamp
+  ].map(csvCell).join(';');
+}
+
+async function appendToRegistry(f){
+  const row  = buildRegistryRow(f);
+  const code = csvCell((f.meta && f.meta.anonCode) || 'SIN-ID');
+  const orig = csvCell(f.name || '');
+  const dir  = downloadDirHandle ? ((await resolveActiveDirHandle()) || downloadDirHandle) : null;
+  if (dir){
+    try {
+      const fh = await dir.getFileHandle(REGISTRY_NAME, { create: true });
+      let prev = '';
+      try { prev = await (await fh.getFile()).text(); } catch(e){ prev = ''; }
+      if (!prev.trim()) prev = '\ufeff' + REGISTRY_HEADER + '\r\n';
+      else if (!/\n$/.test(prev)) prev += '\r\n';
+      // No duplicar si ya se exporto el mismo estudio antes
+      const yaEsta = prev.split(/\r?\n/).some(l => l.indexOf(code) === 0 && l.indexOf(orig) !== -1);
+      if (!yaEsta){
+        const w = await fh.createWritable();
+        await w.write(prev + row + '\r\n');
+        await w.close();
+      }
+      return true;
+    } catch(err){
+      console.error('No se pudo actualizar el registro de correspondencia', err);
+    }
+  }
+  // Sin carpeta elegida no se puede acumular: cae una fila suelta.
+  const blob = new Blob(['\ufeff' + REGISTRY_HEADER + '\r\n' + row + '\r\n'], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = REGISTRY_NAME;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  return false;
+}   
 function buildAnonCode(f){
   const m = f.meta || {};
   return m.anonCode || 'SIN-CLAVE';
