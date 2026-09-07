@@ -3719,7 +3719,152 @@ async function computeAnonCode(rawId){
     return 'SIN-CLAVE';
   }
 }
+// ==================== Exportacion de DICOM anonimizado ====================
+// Estrategia de LISTA BLANCA: se reconstruye el archivo copiando solo las
+// etiquetas tecnicas y clinicas conocidas. Todo lo demas se descarta --
+// etiquetas privadas del fabricante, secuencias anidadas, nombre del medico,
+// institucion, numero de serie del equipo. Lo que no esta en la lista no pasa,
+// aunque no lo hayamos previsto. Los pixeles se copian intactos.
+// NO toca el texto quemado en la imagen: eso requiere revision visual.
 
+const ANON_KEEP_EXACT = new Set([
+  'x00080005','x00080008','x00080016','x00080018','x00080020','x00080021',
+  'x00080022','x00080023','x00080060','x00080064','x00080068','x00080070',
+  'x00081030','x0008103e','x00081090',
+  'x00100010','x00100020','x00100030','x00100040','x00101010','x00101020','x00101030',
+  'x0020000d','x0020000e','x00200011','x00200012','x00200013',
+  'x00200020','x00200032','x00200037','x00200060','x00200062',
+  'x20500020','x7fe00010'
+]);
+const ANON_KEEP_GROUPS = new Set([0x0018, 0x0028]);
+const ANON_DROP_EXACT  = new Set(['x00181000','x00181002','x00181030']);
+const ANON_LONG_VRS = new Set(['OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR']);
+
+function anonTagParts(t){ return [parseInt(t.slice(1,5),16), parseInt(t.slice(5,9),16)]; }
+
+function anonIsKept(tag){
+  const [g,e] = anonTagParts(tag);
+  if (g === 0x0002) return false;      // grupo meta: se reconstruye aparte
+  if (e === 0x0000) return false;      // longitudes de grupo: cambian al recortar
+  if (g % 2 === 1)  return false;      // grupos impares = privados del fabricante
+  if (ANON_DROP_EXACT.has(tag)) return false;
+  if (ANON_KEEP_GROUPS.has(g)) return true;
+  return ANON_KEEP_EXACT.has(tag);
+}
+
+function anonDateToYearStart(v){
+  const s = (v||'').replace(/\D/g,'');
+  return /^\d{4}/.test(s) ? s.slice(0,4)+'0101' : '';
+}
+
+function rawTagStr(src, el){
+  let s='';
+  for (let i=0;i<el.length;i++) s += String.fromCharCode(src[el.dataOffset+i]);
+  return s.replace(/\0/g,'').trim();
+}
+
+// UID derivado con la misma clave del codigo anonimo: el mismo estudio produce
+// siempre el mismo UID nuevo (las imagenes de un estudio siguen agrupadas),
+// pero desde el archivo no se puede volver al UID original. Raiz 2.25, que el
+// estandar reserva para identificadores derivados.
+async function deriveUid(original){
+  if (!original) return '';
+  const key = window.__dvAnonKey;
+  if (!key) return '';
+  const enc = new TextEncoder();
+  const ck = await crypto.subtle.importKey('raw', enc.encode(key),
+    { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', ck, enc.encode(original)));
+  let n = 0n;
+  for (let i=0;i<12;i++) n = (n << 8n) | BigInt(sig[i]);
+  return '2.25.' + n.toString();
+}
+
+function buildAnonymizedDicom(f){
+  const ds = f.dataSet, meta = f.meta || {};
+  if (!ds || !ds.elements) throw new Error('No hay datos DICOM para exportar.');
+  if (ds.encapsulated) throw new Error('Imagen comprimida: no se puede anonimizar en esta version.');
+  const uids = meta.anonUids;
+  if (!uids || !uids.sop) throw new Error('Los identificadores anonimos aun no estan listos. Espera unos segundos y reintenta.');
+
+  const src = ds.byteArray, els = ds.elements;
+  const explicit = ds.transferSyntax !== '1.2.840.10008.1.2';
+
+  function headerStart(el){
+    if (!el.vr) return el.dataOffset - 8;
+    return ANON_LONG_VRS.has(el.vr) ? el.dataOffset - 12 : el.dataOffset - 8;
+  }
+
+  function el2(group, element, vr, value, forceExplicit){
+    const exp = (forceExplicit === undefined) ? explicit : forceExplicit;
+    let v = value == null ? '' : String(value);
+    if (v.length % 2 === 1) v += (vr === 'UI' ? '\0' : ' ');
+    const out = new Uint8Array(8 + v.length);
+    out[0]=group&0xFF;   out[1]=(group>>8)&0xFF;
+    out[2]=element&0xFF; out[3]=(element>>8)&0xFF;
+    if (exp){ out[4]=vr.charCodeAt(0); out[5]=vr.charCodeAt(1);
+              out[6]=v.length&0xFF; out[7]=(v.length>>8)&0xFF; }
+    else    { out[4]=v.length&0xFF; out[5]=(v.length>>8)&0xFF; out[6]=0; out[7]=0; }
+    for (let i=0;i<v.length;i++) out[8+i]=v.charCodeAt(i)&0xFF;
+    return out;
+  }
+
+  // --- Grupo meta reconstruido (el UID de la imagen tambien aparece aqui) ---
+  const ts = ds.transferSyntax || '1.2.840.10008.1.2.1';
+  const sopClass = els['x00080016'] ? rawTagStr(src, els['x00080016']) : '1.2.840.10008.5.1.4.1.1.1.1';
+  const metaEls = [
+    new Uint8Array([0x02,0x00,0x01,0x00,0x4F,0x42,0x00,0x00,0x02,0x00,0x00,0x00,0x00,0x01]),
+    el2(0x0002,0x0002,'UI', sopClass, true),
+    el2(0x0002,0x0003,'UI', uids.sop, true),
+    el2(0x0002,0x0010,'UI', ts, true),
+    el2(0x0002,0x0012,'UI', '1.2.826.0.1.3680043.10.1338', true)
+  ];
+  const metaLen = metaEls.reduce((n,p)=>n+p.length,0);
+
+  const parts = [
+    new Uint8Array(128),
+    new Uint8Array([0x44,0x49,0x43,0x4D]),
+    new Uint8Array([0x02,0x00,0x00,0x00,0x55,0x4C,0x04,0x00,
+                    metaLen&0xFF,(metaLen>>8)&0xFF,(metaLen>>16)&0xFF,(metaLen>>24)&0xFF])
+  ];
+  metaEls.forEach(p => parts.push(p));
+
+  const birth = anonDateToYearStart(els['x00100030'] ? rawTagStr(src, els['x00100030']) : '');
+  const study = anonDateToYearStart(els['x00080020'] ? rawTagStr(src, els['x00080020']) : '');
+  const code  = (meta.anonCode && meta.anonCode !== 'SIN-CLAVE') ? meta.anonCode : 'SIN-ID';
+
+  const REPLACE = {
+    'x00100010': ()=>el2(0x0010,0x0010,'PN', code),
+    'x00100020': ()=>el2(0x0010,0x0020,'LO', code),
+    'x00100030': ()=>el2(0x0010,0x0030,'DA', birth),
+    'x00080020': ()=>el2(0x0008,0x0020,'DA', study),
+    'x00080021': ()=>el2(0x0008,0x0021,'DA', study),
+    'x00080022': ()=>el2(0x0008,0x0022,'DA', study),
+    'x00080023': ()=>el2(0x0008,0x0023,'DA', study),
+    'x00080018': ()=>el2(0x0008,0x0018,'UI', uids.sop),
+    'x0020000d': ()=>el2(0x0020,0x000d,'UI', uids.study),
+    'x0020000e': ()=>el2(0x0020,0x000e,'UI', uids.series)
+  };
+
+  const orden = Object.keys(els)
+    .filter(t => anonTagParts(t)[0] !== 0x0002)
+    .sort((a,b)=>els[a].dataOffset - els[b].dataOffset);
+
+  for (const tag of orden){
+    if (!anonIsKept(tag)) continue;
+    const el = els[tag];
+    if (el.undefinedLength || el.vr === 'SQ') continue;
+    if (REPLACE[tag]) { parts.push(REPLACE[tag]()); continue; }
+    const h = headerStart(el);
+    if (h < 0) continue;
+    parts.push(src.subarray(h, el.dataOffset + el.length));
+  }
+
+  const total = parts.reduce((n,p)=>n+p.length,0);
+  const out = new Uint8Array(total);
+  let o=0; for (const p of parts){ out.set(p,o); o+=p.length; }
+  return out;
+}
 function buildAnonCode(f){
   const m = f.meta || {};
   return m.anonCode || 'SIN-CLAVE';
