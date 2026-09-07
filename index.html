@@ -4228,6 +4228,7 @@ function drawAnonCode(ctx, f){
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         setTimeout(()=>URL.revokeObjectURL(url), 2000);
       }
+            await appendToRegistry(f);
       showExportProgress(1, 1, 'DICOM');
       finishExportProgress(1, 'DICOM');
     } catch(err){
