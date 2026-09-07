@@ -701,6 +701,10 @@ input[type=range]{accent-color:var(--accent);width:100%;}
               <button class="dv-btn secondary" id="dv-export-all-pdf">PDF</button>
             </div>
           </div>
+                     <button class="dv-btn secondary" id="dv-export-dicom"
+            title="Descarga el DICOM sin datos del paciente, para enviar a lectura ciega">
+            Descargar DICOM anónimo
+          </button>
         </div>
       </div>
     </div>
@@ -4144,6 +4148,35 @@ function drawAnonCode(ctx, f){
   }
 
   exportMainBtn.addEventListener('click', () => exportSingle(currentSingleFormat));
+     // ---- Descarga del DICOM anonimizado (para enviar a lectura ciega) ----
+  const exportDicomBtn = document.getElementById('dv-export-dicom');
+  async function exportAnonDicom(){
+    if (exportBusy) return;
+    const f = state.files[state.activeIndex];
+    if (!f || f.status !== 'ok'){ alert('Primero carga y selecciona un estudio.'); return; }
+    setExportBusy(true);
+    try {
+      await ensureFolderChosen();
+      const bytes = buildAnonymizedDicom(f);
+      const blob = new Blob([bytes], { type: 'application/dicom' });
+      const filename = ((f.meta && f.meta.anonCode) || 'SIN-ID') + '.dcm';
+      const savedToFolder = await saveBlobToChosenFolder(blob, filename);
+      if (!savedToFolder){
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+      }
+      showExportProgress(1, 1, 'DICOM');
+      finishExportProgress(1, 'DICOM');
+    } catch(err){
+      alert('No se pudo exportar el DICOM anónimo:\n' + (err && err.message ? err.message : err));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+  if (exportDicomBtn) exportDicomBtn.addEventListener('click', exportAnonDicom);
   exportJpgBtn.addEventListener('click', () => {
     currentSingleFormat = 'jpg';
     updateSplitButtonLabel(exportMainBtn, 'Descargar', 'jpg');
